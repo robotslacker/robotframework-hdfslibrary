@@ -1,0 +1,13 @@
+.idea/
+.vscode/
+.cache/
+.coverage/
+/localtest
+/build
+/dist
+/*.egg-info
+
+*.pyc
+*.deb
+*.swp
+
