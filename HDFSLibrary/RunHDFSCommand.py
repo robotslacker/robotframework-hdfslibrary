@@ -1,9 +1,13 @@
 # -*- coding: UTF-8 -*-
 import os
+import fnmatch
 from pathlib import Path
 from hdfs.client import Client
+from hdfs import InsecureClient
 from hdfs.util import HdfsError
 import traceback
+from glob import glob
+from robot.api import logger
 
 
 class HDFSException(Exception):
@@ -18,75 +22,134 @@ class RunHDFSCommand(object):
     ROBOT_LIBRARY_SCOPE = 'TEST SUITE'
 
     def __init__(self):
-        self.m_HDFS_Handler = None
-        self.m_HDFS_Protocal = None
-        self.m_HDFS_NodePort = None
-        self.m_HDFS_WebFSURL = None
-        self.m_HDFS_WebFSDir = None
+        self.__m_HDFS_Handler__ = None
+        self.__m_HDFS_Protocal__ = None
+        self.__m_HDFS_NodePort__ = None
+        self.__m_HDFS_WebFSURL__ = None
+        self.__m_HDFS_WebFSDir__ = None
+        self.__m_HDFS_ConnectUser = None
 
-    # 创建目录
     def HDFS_mkdirs(self, hdfs_path):
-        if self.m_HDFS_Handler is None:
+        """ 创建目录 """
+        if self.__m_HDFS_Handler__ is None:
             raise HDFSException("Please Connect HDFS first.")
-        self.m_HDFS_Handler.makedirs(hdfs_path)
+        self.__m_HDFS_Handler__.makedirs(os.path.join(self.__m_HDFS_WebFSDir__, hdfs_path).replace('\\', '/'))
 
-    # 删除hdfs文件
-    def HDFS_Delete(self, hdfs_path):
-        if self.m_HDFS_Handler is None:
+    def HDFS_setPermission(self, hdfs_path, permission):
+        """ 修改指定文件的权限信息 """
+        if self.__m_HDFS_Handler__ is None:
             raise HDFSException("Please Connect HDFS first.")
-        self.m_HDFS_Handler.delete(hdfs_path)
+        m_hdfs_filepath = os.path.dirname(hdfs_path)
+        m_hdfs_filename = os.path.basename(hdfs_path)
+        self.__m_HDFS_Handler__.set_permission(
+            os.path.join(self.__m_HDFS_WebFSDir__, m_hdfs_filepath, m_hdfs_filename).replace('\\', '/'),
+            permission=permission)
 
-    # 上传文件到hdfs
-    def HDFS_Upload(self, local_path, hdfs_path=""):
-        if self.m_HDFS_Handler is None:
+    def HDFS_Delete(self, hdfs_path, recusive=False):
+        """ 删除指定的HDFS文件 """
+        if self.__m_HDFS_Handler__ is None:
             raise HDFSException("Please Connect HDFS first.")
-        try:
-            self.m_HDFS_Handler.upload(hdfs_path, local_path, overwrite=True, cleanup=True)
-        except HdfsError as he:
-            raise HDFSException(repr(he))
-        except Exception as oe:
-            print('traceback.print_exc():\n%s' % traceback.print_exc())
-            print('traceback.format_exc():\n%s' % traceback.format_exc())
 
-    # 从hdfs获取文件到本地
-    def HDFS_Download(self, hdfs_path="", local_path=""):
-        if self.m_HDFS_Handler is None:
+        m_FileList = self.HDFS_list(recusive=recusive)
+        for row in m_FileList:
+            if fnmatch.fnmatch(row[0], hdfs_path):
+                logger.write("Will remove hdfs file [" + row[0] + "] ... ")
+                self.__m_HDFS_Handler__.delete(row[0], recursive=True)
+
+    def HDFS_Upload(self, local_path, hdfs_path=None):
+        """ 上传文件到hdfs """
+        if self.__m_HDFS_Handler__ is None:
             raise HDFSException("Please Connect HDFS first.")
-        self.m_HDFS_Handler.download(hdfs_path, local_path, overwrite=True)
 
-    # 返回目录下的文件
-    def HDFS_list(self, hdfs_path=""):
-        # status
-        #    True    同时返回状态信息
-        #    False   不返回状态信息
-        if self.m_HDFS_Handler is None:
+        for file in glob(local_path):
+            try:
+                logger.info("Will upload file [" + str(file) + "] to [" + str(hdfs_path) + "] .... ")
+                if hdfs_path is None:
+                    m_hdfs_filepath = ""
+                    m_hdfs_filename = os.path.basename(file)
+                else:
+                    if hdfs_path.endswith("/"):
+                        m_hdfs_filepath = hdfs_path
+                        m_hdfs_filename = os.path.basename(file)
+                    else:
+                        m_hdfs_filepath = os.path.dirname(hdfs_path)
+                        m_hdfs_filename = os.path.basename(hdfs_path)
+                self.__m_HDFS_Handler__.upload(
+                    os.path.join(self.__m_HDFS_WebFSDir__, m_hdfs_filepath, m_hdfs_filename).replace('\\', '/'),
+                    file,
+                    overwrite=True,
+                    cleanup=True)
+            except HdfsError as he:
+                print('traceback.print_exc():\n%s' % traceback.print_exc())
+                print('traceback.format_exc():\n%s' % traceback.format_exc())
+                raise HDFSException(repr(he))
+
+    def HDFS_Download(self, hdfs_path="", local_path="", recusive=False):
+        """ 从hdfs获取文件到本地 """
+        if self.__m_HDFS_Handler__ is None:
             raise HDFSException("Please Connect HDFS first.")
-        return self.m_HDFS_Handler.list(hdfs_path, status=True)
 
-    # 切换当前目录
-    # 其实就是重新连接了
+        logger.write("Try download remote hdfs [" + hdfs_path + "] to [" + local_path + "] ....")
+        # 如果本地没有对应目录，且local_path传递的是一个目录，则建立目录
+        if "T_WORK" in os.environ:
+            m_LocalPath = os.path.join(os.environ["T_WORK"], local_path)
+        else:
+            m_LocalPath = local_path
+        if m_LocalPath.endswith("/") and not os.path.exists(m_LocalPath):
+            os.makedirs(m_LocalPath)
+
+        m_FileList = self.HDFS_list(recusive=recusive)
+        for row in m_FileList:
+            if fnmatch.fnmatch(row[0], hdfs_path):
+                logger.write("Downloading remote hdfs file [" + row[0] + "] to local [" + m_LocalPath + "] ... ")
+                self.__m_HDFS_Handler__.download(row[0], m_LocalPath, overwrite=True)
+
+    def HDFS_list(self, hdfs_path="", recusive=False):
+        """ 返回目录下的文件 """
+        if self.__m_HDFS_Handler__ is None:
+            raise HDFSException("Please Connect HDFS first.")
+        m_ReturnList = []
+        if not recusive:
+            for row in self.__m_HDFS_Handler__.list(hdfs_path, status=True):
+                m_ReturnList.append((os.path.join(hdfs_path, row[0]), row[1]))
+            return m_ReturnList
+        else:
+            for row in self.__m_HDFS_Handler__.list(hdfs_path, status=True):
+                if row[1]['type'].upper() == 'DIRECTORY':
+                    m_ReturnList.extend(
+                        self.HDFS_list(os.path.join(hdfs_path, row[0]).replace("\\", "/"),
+                                       recusive=True)
+                    )
+                else:
+                    m_ReturnList.append((os.path.join(hdfs_path, row[0]).replace("\\", "/"), row[1]))
+            return m_ReturnList
+
     def HDFS_cd(self, hdfs_path):
-        m_NewDirectory = Path(os.path.join(self.m_HDFS_WebFSDir, hdfs_path)).as_posix()
-        self.m_HDFS_WebFSDir = m_NewDirectory
-        self.m_HDFS_Handler = Client(self.m_HDFS_WebFSURL, self.m_HDFS_WebFSDir, session=None)
+        """ 切换当前目录， 其实就是重新连接了 """
+        m_NewDirectory = Path(os.path.join(self.__m_HDFS_WebFSDir__, hdfs_path)).as_posix()
+        self.__m_HDFS_WebFSDir__ = m_NewDirectory
+        self.__m_HDFS_Handler__ = Client(self.__m_HDFS_WebFSURL__, self.__m_HDFS_WebFSDir__, session=None)
 
-    # 连接HDFS
-    def HDFS_Connnect(self, p_szURL):
-        self.m_HDFS_Protocal = p_szURL.split("://")[0]
-        self.m_HDFS_NodePort = p_szURL[len(self.m_HDFS_Protocal) + 3:].split("/")[0]
-        self.m_HDFS_WebFSURL = self.m_HDFS_Protocal + "://" + self.m_HDFS_NodePort
-        self.m_HDFS_WebFSDir = p_szURL[len(self.m_HDFS_WebFSURL):]
-        self.m_HDFS_Handler = Client(self.m_HDFS_WebFSURL,
-                                self.m_HDFS_WebFSDir,
-                                proxy=None, session=None)
+    def HDFS_SetConnectedUser(self, p_ConnectUser):
+        """ 设置HDFS连接时使用的用户 """
+        self.__m_HDFS_ConnectUser = p_ConnectUser
+
+    def HDFS_Connect(self, p_szURL):
+        """ 连接HDFS, URL使用WEBFS协议 """
+        self.__m_HDFS_Protocal__ = p_szURL.split("://")[0]
+        self.__m_HDFS_NodePort__ = p_szURL[len(self.__m_HDFS_Protocal__) + 3:].split("/")[0]
+        self.__m_HDFS_WebFSURL__ = self.__m_HDFS_Protocal__ + "://" + self.__m_HDFS_NodePort__
+        self.__m_HDFS_WebFSDir__ = p_szURL[len(self.__m_HDFS_WebFSURL__):]
+        logger.info("Will connect to [" + str(self.__m_HDFS_WebFSURL__) + "]," +
+                    "Rootdir is [" + str(self.__m_HDFS_WebFSDir__) + "] .... ")
+        self.__m_HDFS_Handler__ = InsecureClient(url=self.__m_HDFS_WebFSURL__,
+                                                 user=self.__m_HDFS_ConnectUser,
+                                                 root=self.__m_HDFS_WebFSDir__)
+
 
 if __name__ == '__main__':
     myCompare = RunHDFSCommand()
-
-    myCompare.HDFS_Connnect("http://node64:50070/node62/jenkins/work")
-    myCompare.HDFS_cd("/node62/jenkins/work")
-    mylist = myCompare.HDFS_list()
-    for row in mylist:
-        print("Row = " + str(row))
-    # myCompare.HDFS_Download("test1.sql")
-    myCompare.HDFS_Upload("tag.txt")
+    myCompare.HDFS_SetConnectedUser("ldbtest")
+    myCompare.HDFS_Connect("http://node73:50070/user/testdb73/jenkins/work")
+    os.environ["T_WORK"] = "C:\\Work\\linkoop\\linkoop-auto-test\\linkoopdb\\regression\\work"
+    myCompare.HDFS_Delete("*.txt")

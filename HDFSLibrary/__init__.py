@@ -24,4 +24,4 @@ class HDFSLibrary(RunHDFSCommand):
     $>  robot [test file]
     """
     ROBOT_LIBRARY_DOC_FORMAT = 'TEXT'
-    ROBOT_LIBRARY_VERSION = '0.0.2'
+    ROBOT_LIBRARY_VERSION = '0.0.3'
